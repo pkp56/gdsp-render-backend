@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: gdsp-lola-t290-api
+    runtime: node
+    plan: starter
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: gdsp-lola-t290-db
+          property: connectionString
+      - key: ADMIN_USERNAME
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: FRONTEND_ORIGIN
+        sync: false
+
+databases:
+  - name: gdsp-lola-t290-db
+    plan: basic-256mb
+    databaseName: gdsp_results
+    user: gdsp_admin
