@@ -6,7 +6,7 @@ const { Pool } = require("pg");
 
 const app = express();
 app.disable("x-powered-by");
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "5mb" }));
 
 const required = ["DATABASE_URL", "ADMIN_USERNAME", "ADMIN_PASSWORD", "JWT_SECRET"];
 for (const key of required) {
@@ -31,7 +31,7 @@ app.use(cors({
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL.includes("render.com")
+  ssl: /neon\.tech|render\.com/i.test(process.env.DATABASE_URL)
     ? { rejectUnauthorized: false }
     : undefined
 });
@@ -42,13 +42,15 @@ async function initDb() {
       id SMALLINT PRIMARY KEY CHECK (id = 1),
       drivers JSONB NOT NULL DEFAULT '[]'::jsonb,
       penalties JSONB NOT NULL DEFAULT '[]'::jsonb,
+      championship JSONB NOT NULL DEFAULT '{}'::jsonb,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_by TEXT
     )
   `);
+  await pool.query(`ALTER TABLE gdsp_championship_data ADD COLUMN IF NOT EXISTS championship JSONB NOT NULL DEFAULT '{}'::jsonb`);
   await pool.query(`
-    INSERT INTO gdsp_championship_data (id, drivers, penalties)
-    VALUES (1, '[]'::jsonb, '[]'::jsonb)
+    INSERT INTO gdsp_championship_data (id, drivers, penalties, championship)
+    VALUES (1, '[]'::jsonb, '[]'::jsonb, '{}'::jsonb)
     ON CONFLICT (id) DO NOTHING
   `);
 }
@@ -88,6 +90,59 @@ app.get("/health", async (_req, res) => {
     res.json({ ok: true, service: "gdsp-lola-t290-api", database: "connected" });
   } catch {
     res.status(503).json({ ok: false, database: "unavailable" });
+  }
+});
+
+
+function isNonEmptyObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length > 0;
+}
+
+// Compatibility routes for the existing GDSP frontend; the full championship
+// JSON is stored separately so the existing results/penalties API remains intact.
+app.post("/api/admin/login", async (req, res) => {
+  const username = String(req.body?.username || "");
+  const password = String(req.body?.password || "");
+  const expectedUser = process.env.ADMIN_USERNAME;
+  const expectedPassword = process.env.ADMIN_PASSWORD;
+  const validUser = username === expectedUser;
+  const validPassword = await bcrypt.compare(password, expectedPassword.startsWith("$2")
+    ? expectedPassword
+    : await bcrypt.hash(expectedPassword, 10));
+  if (!validUser || !validPassword) {
+    return res.status(401).json({ error: "Identifiant ou mot de passe incorrect." });
+  }
+  const token = jwt.sign({ sub: expectedUser, role: "admin" }, process.env.JWT_SECRET, { expiresIn: "8h" });
+  return res.json({ token, expiresIn: 28800 });
+});
+
+app.get("/api/championship", async (_req, res) => {
+  try {
+    const { rows } = await pool.query("SELECT championship, updated_at FROM gdsp_championship_data WHERE id = 1");
+    return res.json({ championship: rows[0]?.championship || {}, updatedAt: rows[0]?.updated_at || null });
+  } catch (error) {
+    console.error("GET championship:", error.message);
+    return res.status(500).json({ error: "Impossible de lire le championnat." });
+  }
+});
+
+app.post("/api/save-championship", requireAuth, async (req, res) => {
+  if (!isNonEmptyObject(req.body)) return res.status(400).json({ error: "Championnat JSON invalide." });
+  const payload = JSON.stringify(req.body);
+  try {
+    const { rows } = await pool.query(`
+      INSERT INTO gdsp_championship_data (id, championship, updated_at, updated_by)
+      VALUES (1, $1::jsonb, NOW(), $2)
+      ON CONFLICT (id) DO UPDATE SET
+        championship = EXCLUDED.championship,
+        updated_at = NOW(),
+        updated_by = EXCLUDED.updated_by
+      RETURNING updated_at
+    `, [payload, req.admin.sub]);
+    return res.json({ status: "ok", message: "Championnat enregistré dans PostgreSQL.", updatedAt: rows[0].updated_at });
+  } catch (error) {
+    console.error("SAVE championship:", error.message);
+    return res.status(500).json({ error: "Impossible d'enregistrer le championnat dans PostgreSQL." });
   }
 });
 
