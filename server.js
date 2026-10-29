@@ -199,14 +199,15 @@ app.post("/api/events", requireAuth, async (req, res) => {
     globalCoef: kind === "open" ? 0.5 : 1.0
   };
   const pointsConfig = { ...defaultConfig, ...(req.body?.pointsConfig || {}) };
+  const initData = (req.body?.data && typeof req.body.data === 'object') ? req.body.data : {};
 
   try {
     const { rows } = await pool.query(
       `INSERT INTO gdsp_events (slug, name, kind, points_config, data, updated_by)
-       VALUES ($1,$2,$3,$4::jsonb,'{}'::jsonb,$5)
+       VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6)
        ON CONFLICT (slug) DO NOTHING
        RETURNING slug, name, kind`,
-      [slug, name, kind, JSON.stringify(pointsConfig), req.admin.sub]
+      [slug, name, kind, JSON.stringify(pointsConfig), JSON.stringify(initData), req.admin.sub]
     );
     if (!rows.length) return res.status(409).json({ error: "Un événement avec cet identifiant existe déjà." });
     res.json({ status: "ok", event: rows[0] });
