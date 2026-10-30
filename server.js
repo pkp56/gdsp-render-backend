@@ -119,16 +119,21 @@ app.get("/health", async (_req, res) => {
 app.post("/api/admin/login", async (req, res) => {
   const username = String(req.body?.username || "");
   const password = String(req.body?.password || "");
-  const expectedUser = process.env.ADMIN_USERNAME;
-  const expectedPassword = process.env.ADMIN_PASSWORD;
+  // Identifiants par défaut de premier secours si les variables d'env ne sont pas configurées.
+  // À REMPLACER en définissant ADMIN_USERNAME / ADMIN_PASSWORD dans Render, puis redéployer.
+  const DEFAULT_USER = "gdspadmin";
+  const DEFAULT_PASS = "gdsp290";
+  const expectedUser = process.env.ADMIN_USERNAME || DEFAULT_USER;
+  const expectedPassword = process.env.ADMIN_PASSWORD || DEFAULT_PASS;
   const validUser = username === expectedUser;
-  const validPassword = await bcrypt.compare(password, expectedPassword.startsWith("$2")
-    ? expectedPassword
-    : await bcrypt.hash(expectedPassword, 10));
+  const isHash = typeof expectedPassword === 'string' && expectedPassword.startsWith("$2");
+  const validPassword = isHash
+    ? await bcrypt.compare(password, expectedPassword)
+    : password === expectedPassword;
   if (!validUser || !validPassword) {
     return res.status(401).json({ error: "Identifiant ou mot de passe incorrect." });
   }
-  const token = jwt.sign({ sub: expectedUser, role: "admin" }, process.env.JWT_SECRET, { expiresIn: "8h" });
+  const token = jwt.sign({ sub: expectedUser, role: "admin" }, process.env.JWT_SECRET||"dev-jwt-secret-change-me", { expiresIn: "8h" });
   return res.json({ token, expiresIn: 28800 });
 });
 
